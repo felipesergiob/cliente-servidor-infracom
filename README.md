@@ -5,8 +5,8 @@
    - [x] A comunicação ocorre via sockets (TCP).
 
 2. **Envio de Pacotes**
-   - [ ] O cliente pode enviar pacotes únicos para o servidor.
-   - [ ] O cliente pode enviar pacotes em rajadas para o servidor.
+   - [x] O cliente pode enviar pacotes únicos para o servidor.
+   - [x] O cliente pode enviar pacotes em rajadas para o servidor.
    - [ ] O cliente pode marcar pacotes específicos para simular erros de integridade.
 
 3. **Recepção e Confirmação**

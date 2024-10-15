@@ -3,7 +3,7 @@ import socket
 def iniciar_servidor(endereco='127.0.0.1', porta=50500):
     servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     servidor.bind((endereco, porta))
-    servidor.listen(5)
+    servidor.listen()
     print(f'Servidor iniciado em {endereco}:{porta}')
 
     while True:
