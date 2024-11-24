@@ -1,11 +1,11 @@
 import socket
-import hashlib
 
 def iniciar_cliente(endereco='127.0.0.1', porta=50500):
     cliente = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     cliente.connect((endereco, porta))
     numero_sequencia = 0
     janela_congestionamento = 1
+    janela_recepcao = (0, 0)
 
     protocolo = input("Escolha o protocolo (Selective Repeat / Go-Back-N): ").strip()
     cliente.send(protocolo.encode())
@@ -23,13 +23,15 @@ def iniciar_cliente(endereco='127.0.0.1', porta=50500):
         print("2. Enviar pacotes em rajada")
         print("3. Simular erro de integridade")
         print("4. Manipular número de sequência")
-        print("5. Sair")
+        print("5. Enviar pacote forçando NACK")
+        print("6. Forçar erro no ACK/NACK retornado")
+        print("7. Sair")
         opcao = input("Digite o número da opção: ")
 
         if opcao == '1':
             conteudo = input("Digite o conteúdo para o pacote: ")
-            numero_sequencia, janela_congestionamento = enviar_pacote(
-                cliente, numero_sequencia, conteudo, janela_congestionamento
+            numero_sequencia, janela_congestionamento, janela_recepcao = enviar_pacote(
+                cliente, numero_sequencia, conteudo, janela_congestionamento, janela_recepcao
             )
 
         elif opcao == '2':
@@ -38,23 +40,35 @@ def iniciar_cliente(endereco='127.0.0.1', porta=50500):
             for i in range(num_pacotes):
                 conteudo = input(f"Digite o conteúdo para o pacote {i + 1}: ")
                 conteudos.append(conteudo)
-            numero_sequencia, janela_congestionamento = enviar_em_rajada(
-                cliente, conteudos, numero_sequencia, janela_congestionamento
+            numero_sequencia, janela_congestionamento, janela_recepcao = enviar_em_rajada(
+                cliente, conteudos, numero_sequencia, janela_congestionamento, janela_recepcao
             )
 
         elif opcao == '3':
             checksum_errado = input("Digite o checksum manualmente para simular erro: ")
             conteudo = input("Digite o conteúdo para o pacote: ")
-            numero_sequencia, janela_congestionamento = enviar_pacote_com_checksum(
-                cliente, numero_sequencia, conteudo, checksum_errado, janela_congestionamento
+            numero_sequencia, janela_congestionamento, janela_recepcao = enviar_pacote_com_checksum(
+                cliente, numero_sequencia, conteudo, checksum_errado, janela_congestionamento, janela_recepcao
             )
 
         elif opcao == '4':
             seq_num_manipulado = int(input("Informe o número de sequência que deseja enviar: "))
-            conteudo = input("Digite o conteúdo para o pacote: ")
-            enviar_pacote(cliente, seq_num_manipulado, conteudo, janela_congestionamento)
+            if seq_num_manipulado < janela_recepcao[0] or seq_num_manipulado >= janela_recepcao[1]:
+                print(f"Erro: Número de sequência {seq_num_manipulado} fora da janela de recepção ({janela_recepcao[0]}-{janela_recepcao[1] - 1}).")
+            else:
+                conteudo = input("Digite o conteúdo para o pacote: ")
+                enviar_pacote(cliente, seq_num_manipulado, conteudo, janela_congestionamento, janela_recepcao)
 
         elif opcao == '5':
+            conteudo = input("Digite o conteúdo para o pacote que causará NACK: ")
+            numero_sequencia, janela_congestionamento, janela_recepcao = enviar_pacote_forcando_nack(
+                cliente, numero_sequencia, conteudo, janela_congestionamento, janela_recepcao
+            )
+
+        elif opcao == '6':
+            forcar_erro_no_ack_nack(cliente)
+
+        elif opcao == '7':
             break
 
         print("----------------------")
@@ -62,29 +76,39 @@ def iniciar_cliente(endereco='127.0.0.1', porta=50500):
     cliente.close()
 
 def calcular_soma_verificacao(dados):
-    checksum = hashlib.md5(dados.encode()).hexdigest()
-    return checksum
+    checksum = sum(ord(c) for c in dados) % 256
+    return str(checksum)
 
-def enviar_pacote(cliente, seq_num, conteudo, janela_congestionamento):
+def enviar_pacote(cliente, seq_num, conteudo, janela_congestionamento, janela_recepcao):
     checksum = calcular_soma_verificacao(conteudo)
     mensagem = f"{seq_num}:{checksum}:{conteudo}".encode()
     print(f"Enviando pacote: {mensagem.decode()}")
     cliente.send(mensagem)
     resposta = cliente.recv(1024).decode()
     print(f"Resposta do servidor: {resposta}")
-    seq_num, janela_congestionamento = processar_resposta(resposta, seq_num, janela_congestionamento)
-    return seq_num, janela_congestionamento
+    seq_num, janela_congestionamento, janela_recepcao = processar_resposta(resposta, seq_num, janela_congestionamento, janela_recepcao)
+    return seq_num, janela_congestionamento, janela_recepcao
 
-def enviar_pacote_com_checksum(cliente, seq_num, conteudo, checksum_errado, janela_congestionamento):
+def enviar_pacote_com_checksum(cliente, seq_num, conteudo, checksum_errado, janela_congestionamento, janela_recepcao):
     mensagem = f"{seq_num}:{checksum_errado}:{conteudo}".encode()
     print(f"Enviando pacote com erro de integridade: {mensagem.decode()}")
     cliente.send(mensagem)
     resposta = cliente.recv(1024).decode()
     print(f"Resposta do servidor: {resposta}")
-    seq_num, janela_congestionamento = processar_resposta(resposta, seq_num, janela_congestionamento, atualizar_sequencia=False)
-    return seq_num, janela_congestionamento
+    seq_num, janela_congestionamento, janela_recepcao = processar_resposta(resposta, seq_num, janela_congestionamento, janela_recepcao, atualizar_sequencia=False)
+    return seq_num, janela_congestionamento, janela_recepcao
 
-def enviar_em_rajada(cliente, conteudos, seq_num, janela_congestionamento):
+def enviar_pacote_forcando_nack(cliente, seq_num, conteudo, janela_congestionamento, janela_recepcao):
+    checksum_errado = "000"
+    mensagem = f"{seq_num}:{checksum_errado}:{conteudo}".encode()
+    print(f"Enviando pacote para forçar NACK: {mensagem.decode()}")
+    cliente.send(mensagem)
+    resposta = cliente.recv(1024).decode()
+    print(f"Resposta do servidor: {resposta}")
+    seq_num, janela_congestionamento, janela_recepcao = processar_resposta(resposta, seq_num, janela_congestionamento, janela_recepcao, atualizar_sequencia=False)
+    return seq_num, janela_congestionamento, janela_recepcao
+
+def enviar_em_rajada(cliente, conteudos, seq_num, janela_congestionamento, janela_recepcao):
     pacotes_enviados = 0
     pacotes_rejeitados = []
 
@@ -99,7 +123,7 @@ def enviar_em_rajada(cliente, conteudos, seq_num, janela_congestionamento):
             cliente.send(mensagem)
             resposta = cliente.recv(1024).decode()
             print(f"Resposta do servidor: {resposta}")
-            seq_num, janela_congestionamento = processar_resposta(resposta, seq_num, janela_congestionamento)
+            seq_num, janela_congestionamento, janela_recepcao = processar_resposta(resposta, seq_num, janela_congestionamento, janela_recepcao)
             pacotes_enviados += 1
 
         if pacotes_enviados < len(conteudos):
@@ -107,12 +131,22 @@ def enviar_em_rajada(cliente, conteudos, seq_num, janela_congestionamento):
             print(f"Rede congestionada. Pacotes rejeitados: {len(pacotes_rejeitados)} ({pacotes_rejeitados})")
             break
 
-    return seq_num, janela_congestionamento
+    return seq_num, janela_congestionamento, janela_recepcao
 
-def processar_resposta(resposta, seq_num, janela_congestionamento, atualizar_sequencia=True):
+def processar_resposta(resposta, seq_num, janela_congestionamento, janela_recepcao, atualizar_sequencia=True):
     try:
-        ack, recebido, _ = resposta.split(":")
+        conteudo_resposta, checksum_recebido = resposta.rsplit(":", 1)
+        checksum_calculado = calcular_soma_verificacao(conteudo_resposta)
+
+        if checksum_recebido != checksum_calculado:
+            print(f"Erro de integridade no ACK/NACK. Checksum esperado: {checksum_calculado}, recebido: {checksum_recebido}")
+            return seq_num, janela_congestionamento, janela_recepcao
+
+        ack, recebido, janela_info = conteudo_resposta.split(":")
         recebido = int(recebido)
+        janela_inicio, janela_fim = map(int, janela_info.strip("[]").split("-"))
+
+        janela_recepcao = (janela_inicio, janela_fim + 1)
 
         if ack == "ACK":
             if atualizar_sequencia:
@@ -125,7 +159,14 @@ def processar_resposta(resposta, seq_num, janela_congestionamento, atualizar_seq
             print(f"Janela de Congestionamento Reduzida: {janela_congestionamento} (NACK recebido)")
     except ValueError:
         print("Erro ao processar a resposta do servidor.")
-    return seq_num, janela_congestionamento
+    return seq_num, janela_congestionamento, janela_recepcao
+
+def forcar_erro_no_ack_nack(cliente):
+    mensagem = "FORCAR_ERRO"
+    print(f"Enviando mensagem para forçar erro no ACK/NACK: {mensagem}")
+    cliente.send(mensagem.encode())
+    resposta = cliente.recv(1024).decode()
+    print(f"Resposta do servidor (com erro forçado): {resposta}")
 
 if __name__ == '__main__':
     iniciar_cliente()

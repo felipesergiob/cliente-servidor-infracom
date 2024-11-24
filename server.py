@@ -1,6 +1,5 @@
 import socket
 import threading
-import hashlib
 
 def iniciar_servidor(endereco='127.0.0.1', porta=50500):
     servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -13,8 +12,8 @@ def iniciar_servidor(endereco='127.0.0.1', porta=50500):
         threading.Thread(target=tratar_cliente, args=(conexao,)).start()
 
 def calcular_soma_verificacao(dados):
-    checksum = hashlib.md5(dados.encode()).hexdigest()
-    return checksum
+    checksum = sum(ord(c) for c in dados) % 256
+    return str(checksum)
 
 def tratar_cliente(conexao):
     protocolo = conexao.recv(1024).decode().strip()
@@ -37,46 +36,54 @@ def tratar_cliente(conexao):
         texto = mensagem.decode()
         print(f"Mensagem recebida: {texto}")
 
+        if texto == "FORCAR_ERRO":
+            resposta = f"ACK:{sequencia_esperada}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]"
+            checksum_incorreto = "000"
+            print(f"Enviando ACK com checksum incorreto: {resposta} com checksum incorreto: {checksum_incorreto}")
+            conexao.send(f"{resposta}:{checksum_incorreto}".encode())
+            continue
+
         try:
             seq_num, checksum_recebido, dados = texto.split(":")
             seq_num = int(seq_num)
             checksum_calculado = calcular_soma_verificacao(dados)
 
-            if seq_num < sequencia_esperada or seq_num >= sequencia_esperada + janela_recepcao:
-                resposta = f"NACK:{sequencia_esperada}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]".encode()
-                conexao.send(resposta)
-                continue
-
             if checksum_recebido != checksum_calculado:
-                resposta = f"NACK:{seq_num}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]".encode()
-                conexao.send(resposta)
+                resposta = f"NACK:{sequencia_esperada}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]"
+                checksum_resposta = calcular_soma_verificacao(resposta)
+                print(f"Enviando NACK devido a erro de integridade: {resposta} com checksum: {checksum_resposta}")
+                conexao.send(f"{resposta}:{checksum_resposta}".encode())
                 continue
 
             if protocolo == "Go-Back-N":
                 if seq_num == sequencia_esperada:
+                    resposta = f"ACK:{seq_num}:[{sequencia_esperada + 1}-{sequencia_esperada + janela_recepcao}]"
                     sequencia_esperada += 1
-                    resposta = f"ACK:{seq_num}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]".encode()
                 else:
-                    resposta = f"NACK:{sequencia_esperada}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]".encode()
-
+                    resposta = f"NACK:{sequencia_esperada}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]"
             elif protocolo == "Selective Repeat":
                 if seq_num == sequencia_esperada:
                     sequencia_esperada += 1
                     while sequencia_esperada in pacotes_recebidos:
                         sequencia_esperada += 1
-                    resposta = f"ACK:{seq_num}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]".encode()
+                    resposta = f"ACK:{seq_num}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]"
                 else:
                     pacotes_recebidos[seq_num] = dados
-                    resposta = f"ACK:{seq_num}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]".encode()
+                    resposta = f"ACK:{seq_num}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]"
 
-            conexao.send(resposta)
+            checksum_resposta = calcular_soma_verificacao(resposta)
+            print(f"Enviando {resposta.split(':')[0]}: {resposta} com checksum: {checksum_resposta}")
+            conexao.send(f"{resposta}:{checksum_resposta}".encode())
 
         except ValueError:
-            resposta = f"NACK:{sequencia_esperada}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]".encode()
-            conexao.send(resposta)
+            resposta = f"NACK:{sequencia_esperada}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]"
+            checksum_resposta = calcular_soma_verificacao(resposta)
+            print(f"Enviando NACK devido a erro de formato: {resposta} com checksum: {checksum_resposta}")
+            conexao.send(f"{resposta}:{checksum_resposta}".encode())
 
     conexao.close()
     print("Conexão encerrada.")
+
 
 if __name__ == '__main__':
     iniciar_servidor()
