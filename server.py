@@ -36,11 +36,46 @@ def tratar_cliente(conexao):
         texto = mensagem.decode()
         print(f"Mensagem recebida: {texto}")
 
-        if texto == "FORCAR_ERRO":
+        if texto.startswith("FLAG_ERRO_ACK"):
+            _, conteudo = texto.split(":", 1)
             resposta = f"ACK:{sequencia_esperada}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]"
             checksum_incorreto = "000"
-            print(f"Enviando ACK com checksum incorreto: {resposta} com checksum incorreto: {checksum_incorreto}")
+            print(f"Enviando ACK com checksum incorreto para o conteúdo: '{conteudo}'")
             conexao.send(f"{resposta}:{checksum_incorreto}".encode())
+            continue
+
+        if texto.startswith("FLAG_IGNORAR"):
+            _, conteudo = texto.split(":", 1)
+            print(f"Mensagem com flag para ignorar recebida. Conteúdo: '{conteudo}'. Ignorando.")
+            continue
+
+        if texto.startswith("FLAG_NO_ACK"):
+            _, seq_num, checksum, conteudo = texto.split(":")
+            print(f"Recebido pacote sem enviar ACK. Número de sequência: {seq_num}")
+            continue
+
+        if texto.startswith("LOTE"):
+            _, seq_inicial, pacotes = texto.split(":", 2)
+            seq_inicial = int(seq_inicial)
+            pacotes = pacotes.split(",")
+            erro = False
+
+            for i, pacote in enumerate(pacotes):
+                checksum_recebido, conteudo = pacote.split(":", 1)
+                checksum_calculado = calcular_soma_verificacao(conteudo)
+                if checksum_recebido != checksum_calculado:
+                    erro = True
+                    break
+
+            if erro:
+                resposta = f"NACK:{sequencia_esperada}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]"
+            else:
+                sequencia_esperada += len(pacotes)
+                resposta = f"ACK:{seq_inicial}:[{sequencia_esperada}-{sequencia_esperada + janela_recepcao - 1}]"
+
+            checksum_resposta = calcular_soma_verificacao(resposta)
+            print(f"Enviando {resposta.split(':')[0]}: {resposta} com checksum: {checksum_resposta}")
+            conexao.send(f"{resposta}:{checksum_resposta}".encode())
             continue
 
         try:
@@ -83,7 +118,6 @@ def tratar_cliente(conexao):
 
     conexao.close()
     print("Conexão encerrada.")
-
 
 if __name__ == '__main__':
     iniciar_servidor()

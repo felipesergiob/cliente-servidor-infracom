@@ -1,4 +1,5 @@
 import socket
+import time
 
 def iniciar_cliente(endereco='127.0.0.1', porta=50500):
     cliente = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -24,8 +25,11 @@ def iniciar_cliente(endereco='127.0.0.1', porta=50500):
         print("3. Simular erro de integridade")
         print("4. Manipular número de sequência")
         print("5. Enviar pacote forçando NACK")
-        print("6. Forçar erro no ACK/NACK retornado")
-        print("7. Sair")
+        print("6. Forçar erro no ACK retornado")
+        print("7. Enviar pacote que deve ser perdido")
+        print("8. Enviar pacotes em lote único")
+        print("9. Enviar pacote com atraso proposital e sem ACK (testar timeout)")
+        print("10. Sair")
         opcao = input("Digite o número da opção: ")
 
         if opcao == '1':
@@ -69,6 +73,23 @@ def iniciar_cliente(endereco='127.0.0.1', porta=50500):
             forcar_erro_no_ack_nack(cliente)
 
         elif opcao == '7':
+            enviar_pacote_para_ignorar(cliente)
+
+        elif opcao == '8':
+            num_pacotes = int(input("Quantos pacotes deseja enviar no lote? "))
+            conteudos = []
+            for i in range(num_pacotes):
+                conteudo = input(f"Digite o conteúdo para o pacote {i + 1}: ")
+                conteudos.append(conteudo)
+            numero_sequencia, janela_congestionamento, janela_recepcao = enviar_em_lote(
+                cliente, conteudos, numero_sequencia, janela_congestionamento, janela_recepcao
+            )
+
+        elif opcao == '9':
+            conteudo = input("Digite o conteúdo para o pacote: ")
+            numero_sequencia = enviar_pacote_com_timeout(cliente, numero_sequencia, conteudo)
+
+        elif opcao == '10':
             break
 
         print("----------------------")
@@ -86,7 +107,9 @@ def enviar_pacote(cliente, seq_num, conteudo, janela_congestionamento, janela_re
     cliente.send(mensagem)
     resposta = cliente.recv(1024).decode()
     print(f"Resposta do servidor: {resposta}")
-    seq_num, janela_congestionamento, janela_recepcao = processar_resposta(resposta, seq_num, janela_congestionamento, janela_recepcao)
+    seq_num, janela_congestionamento, janela_recepcao = processar_resposta(
+        resposta, seq_num, janela_congestionamento, janela_recepcao
+    )
     return seq_num, janela_congestionamento, janela_recepcao
 
 def enviar_pacote_com_checksum(cliente, seq_num, conteudo, checksum_errado, janela_congestionamento, janela_recepcao):
@@ -108,6 +131,27 @@ def enviar_pacote_forcando_nack(cliente, seq_num, conteudo, janela_congestioname
     seq_num, janela_congestionamento, janela_recepcao = processar_resposta(resposta, seq_num, janela_congestionamento, janela_recepcao, atualizar_sequencia=False)
     return seq_num, janela_congestionamento, janela_recepcao
 
+def enviar_pacote_com_timeout(cliente, seq_num, conteudo, timeout=15):
+    checksum = calcular_soma_verificacao(conteudo)
+    mensagem = f"FLAG_NO_ACK:{seq_num}:{checksum}:{conteudo}".encode()
+    print(f"Enviando pacote sem ACK esperado: {mensagem.decode()}")
+    cliente.send(mensagem)
+
+    inicio = time.time()
+    while True:
+        print("Aguardando resposta do servidor...", end="\r", flush=True)
+        try:
+            cliente.settimeout(1)
+            resposta = cliente.recv(1024).decode()
+            print("\nResposta recebida do servidor.")
+            print(f"Resposta do servidor: {resposta}")
+            return seq_num + 1
+        except socket.timeout:
+            if time.time() - inicio >= timeout:
+                print("\nTimeout atingido. Retransmitindo pacote...")
+                print("Retransmitindo...")
+                return enviar_pacote(cliente, seq_num, conteudo, 1, (0, 0))
+
 def enviar_em_rajada(cliente, conteudos, seq_num, janela_congestionamento, janela_recepcao):
     pacotes_enviados = 0
     pacotes_rejeitados = []
@@ -123,7 +167,9 @@ def enviar_em_rajada(cliente, conteudos, seq_num, janela_congestionamento, janel
             cliente.send(mensagem)
             resposta = cliente.recv(1024).decode()
             print(f"Resposta do servidor: {resposta}")
-            seq_num, janela_congestionamento, janela_recepcao = processar_resposta(resposta, seq_num, janela_congestionamento, janela_recepcao)
+            seq_num, janela_congestionamento, janela_recepcao = processar_resposta(
+                resposta, seq_num, janela_congestionamento, janela_recepcao
+            )
             pacotes_enviados += 1
 
         if pacotes_enviados < len(conteudos):
@@ -162,11 +208,50 @@ def processar_resposta(resposta, seq_num, janela_congestionamento, janela_recepc
     return seq_num, janela_congestionamento, janela_recepcao
 
 def forcar_erro_no_ack_nack(cliente):
-    mensagem = "FORCAR_ERRO"
-    print(f"Enviando mensagem para forçar erro no ACK/NACK: {mensagem}")
+    flag_erro_ack = "FLAG_ERRO_ACK"
+    conteudo = input("Digite o conteúdo para enviar junto com a flag de erro no ACK/NACK: ")
+    mensagem = f"{flag_erro_ack}:{conteudo}"
+    print(f"Enviando mensagem para forçar erro no ACK: {mensagem}")
     cliente.send(mensagem.encode())
     resposta = cliente.recv(1024).decode()
     print(f"Resposta do servidor (com erro forçado): {resposta}")
+
+def enviar_pacote_para_ignorar(cliente):
+    flag_ignorar = "FLAG_IGNORAR"
+    conteudo = input("Digite o conteúdo para o pacote que será ignorado pelo servidor: ")
+    mensagem = f"{flag_ignorar}:{conteudo}"
+    print(f"Enviando mensagem com flag para ser ignorada: {mensagem}")
+    cliente.send(mensagem.encode())
+    print("Mensagem enviada. Não haverá resposta do servidor para esta mensagem.")
+
+def enviar_em_lote(cliente, conteudos, seq_num, janela_congestionamento, janela_recepcao):
+    flag_lote = "LOTE"
+    pacotes_enviados = 0
+    pacotes_rejeitados = []
+
+    while pacotes_enviados < len(conteudos):
+        pacotes_para_enviar = min(janela_congestionamento, len(conteudos) - pacotes_enviados)
+        lote = conteudos[pacotes_enviados:pacotes_enviados + pacotes_para_enviar]
+        mensagem = f"{flag_lote}:{seq_num}:" + ",".join(f"{calcular_soma_verificacao(c)}:{c}" for c in lote)
+        print(f"Enviando lote de pacotes: {mensagem}")
+        cliente.send(mensagem.encode())
+        resposta = cliente.recv(1024).decode()
+        print(f"Resposta do servidor: {resposta}")
+
+        pacotes_enviados += pacotes_para_enviar
+        seq_num += pacotes_para_enviar
+
+        seq_num, janela_congestionamento, janela_recepcao = processar_resposta(
+            resposta, seq_num - 1, janela_congestionamento, janela_recepcao
+        )
+
+        if pacotes_enviados < len(conteudos):
+            pacotes_rejeitados = conteudos[pacotes_enviados:]
+            print(f"Rede congestionada. Pacotes rejeitados: {len(pacotes_rejeitados)} ({pacotes_rejeitados})")
+            break
+
+    return seq_num, janela_congestionamento, janela_recepcao
+
 
 if __name__ == '__main__':
     iniciar_cliente()
