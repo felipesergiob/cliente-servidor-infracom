@@ -8,7 +8,7 @@ Este projeto implementa uma aplicação cliente-servidor que simula um protocolo
 
 A aplicação foi desenvolvida em Python utilizando sockets para comunicação entre cliente e servidor, com suporte a dois protocolos de controle: **Selective Repeat** e **Go-Back-N**.
 
-## 1. Introdução
+## 1.1 Introdução
     Felipe Sergio
 	Gabriel Antonio 
 	Matheos Guerra
