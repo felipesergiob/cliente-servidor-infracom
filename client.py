@@ -87,7 +87,9 @@ def iniciar_cliente(endereco='127.0.0.1', porta=50500):
 
         elif opcao == '9':
             conteudo = input("Digite o conteúdo para o pacote: ")
-            numero_sequencia = enviar_pacote_com_timeout(cliente, numero_sequencia, conteudo)
+            numero_sequencia, janela_congestionamento, janela_recepcao = enviar_pacote_com_timeout(
+                cliente, numero_sequencia, conteudo, janela_congestionamento, janela_recepcao
+            )
 
         elif opcao == '10':
             break
@@ -131,7 +133,7 @@ def enviar_pacote_forcando_nack(cliente, seq_num, conteudo, janela_congestioname
     seq_num, janela_congestionamento, janela_recepcao = processar_resposta(resposta, seq_num, janela_congestionamento, janela_recepcao, atualizar_sequencia=False)
     return seq_num, janela_congestionamento, janela_recepcao
 
-def enviar_pacote_com_timeout(cliente, seq_num, conteudo, timeout=15):
+def enviar_pacote_com_timeout(cliente, seq_num, conteudo, janela_congestionamento, janela_recepcao, timeout=15):
     checksum = calcular_soma_verificacao(conteudo)
     mensagem = f"FLAG_NO_ACK:{seq_num}:{checksum}:{conteudo}".encode()
     print(f"Enviando pacote sem ACK esperado: {mensagem.decode()}")
@@ -145,12 +147,16 @@ def enviar_pacote_com_timeout(cliente, seq_num, conteudo, timeout=15):
             resposta = cliente.recv(1024).decode()
             print("\nResposta recebida do servidor.")
             print(f"Resposta do servidor: {resposta}")
-            return seq_num + 1
+            seq_num, janela_congestionamento, janela_recepcao = processar_resposta(
+                resposta, seq_num, janela_congestionamento, janela_recepcao
+            )
+            return seq_num, janela_congestionamento, janela_recepcao
         except socket.timeout:
             if time.time() - inicio >= timeout:
                 print("\nTimeout atingido. Retransmitindo pacote...")
                 print("Retransmitindo...")
-                return enviar_pacote(cliente, seq_num, conteudo, 1, (0, 0))
+                return enviar_pacote(cliente, seq_num, conteudo, janela_congestionamento, janela_recepcao)
+
 
 def enviar_em_rajada(cliente, conteudos, seq_num, janela_congestionamento, janela_recepcao):
     pacotes_enviados = 0
@@ -234,16 +240,14 @@ def enviar_em_lote(cliente, conteudos, seq_num, janela_congestionamento, janela_
         lote = conteudos[pacotes_enviados:pacotes_enviados + pacotes_para_enviar]
         mensagem = f"{flag_lote}:{seq_num}:" + ",".join(f"{calcular_soma_verificacao(c)}:{c}" for c in lote)
         print(f"Enviando lote de pacotes: {mensagem}")
-        cliente.send(mensagem.encode())
+        cliente.send(mensagem.encode())        
         resposta = cliente.recv(1024).decode()
         print(f"Resposta do servidor: {resposta}")
 
-        pacotes_enviados += pacotes_para_enviar
-        seq_num += pacotes_para_enviar
-
         seq_num, janela_congestionamento, janela_recepcao = processar_resposta(
-            resposta, seq_num - 1, janela_congestionamento, janela_recepcao
+            resposta, seq_num + pacotes_para_enviar - 1, janela_congestionamento, janela_recepcao
         )
+        pacotes_enviados += pacotes_para_enviar
 
         if pacotes_enviados < len(conteudos):
             pacotes_rejeitados = conteudos[pacotes_enviados:]
